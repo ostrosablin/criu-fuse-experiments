@@ -189,8 +189,7 @@ static int send_fd(int via, int fd)
 	iov.iov_base = &c;
 	iov.iov_len = sizeof(c);
 
-	if (sendmsg(via, &h, 0) <= 0)
-		return -1;
+	while (sendmsg(via, &h, 0) <= 0 && errno == ENOTCONN);
 
 	return 0;
 }
@@ -236,6 +235,7 @@ int main(int argc, char *argv[])
 	int sk;
 	struct sockaddr_un sockaddress;
 	char fdpath[PATH_MAX];
+	uint32_t buf[2] = { 100, 100};
 
 	if (fuse_parse_cmdline(&args, &opts) != 0)
 		return 1;
@@ -275,12 +275,22 @@ int main(int argc, char *argv[])
 			printf("Can't make UDS");
 			exit(1);
 		}
+		if (setsockopt(sk, SOL_SOCKET, SO_SNDBUFFORCE, &buf[0], sizeof(buf[0])) < 0 ||
+			setsockopt(sk, SOL_SOCKET, SO_RCVBUFFORCE, &buf[1], sizeof(buf[1])) < 0) {
+			printf("Unable to set SO_SNDBUFFORCE/SO_RCVBUFFORCE");
+			close(sk);
+			return -1;
+		}
 		ret = bind(sk, (struct sockaddr *) &sockaddress, sizeof(sockaddress));
 		if (ret == -1){
 			printf("BIND ERROR: %d\n", errno);
 			close(sk);
 			exit(1);
 		}
+		/*if (connect(sk, (struct sockaddr *) &sockaddress, sizeof(struct sockaddr_un)) == -1) {
+			printf("socket: %s\n", strerror(errno));
+			exit(1);
+		}*/
 	}
 
 	se = fuse_session_new(&args, &hello_ll_oper,
@@ -293,24 +303,29 @@ int main(int argc, char *argv[])
 
 	if (!peer) {
 		if (fuse_session_mount(se, opts.mountpoint) != 0) {
+			printf("FUSE session mount ERROR: %s\n", strerror(errno));
 			goto err_out3;
 		}
 	}
 	else {
 		se->fd = recv_fd(sk);
+		printf("Read fuse descriptor: %d", se->fd);
 		sprintf(fdpath, "/dev/fd/%d", se->fd);
 		se->mountpoint = fdpath;
 	}
 
 	fuse_daemonize(opts.foreground);
 
-	printf("PID: %d\n", getpid());
-	
 	if (!peer) {
 		if (send_fd(sk, se->fd) < 0) {
 			printf("Can't send FUSE dev descriptor");
 			exit(1);
 		}
+		/*sockaddress.sun_family = AF_UNSPEC;
+		if (connect(sk, (struct sockaddr *)&sockaddress, sizeof(sockaddress.sun_family))) {
+			printf("Can't clear socket's peer");
+			return -1;
+		}*/
 	}
 	/* Block until ctrl+c or fusermount -u */
 	if (opts.singlethread)
