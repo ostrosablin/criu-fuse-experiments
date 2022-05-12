@@ -20,7 +20,7 @@
 
 #define FUSE_USE_VERSION 34
 
-#include "../lib/fuse_i.h"
+#include "libfuse/lib/fuse_i.h"
 #include <fuse_lowlevel.h>
 #include <fuse_common.h>
 #include <stdio.h>
@@ -261,36 +261,39 @@ int main(int argc, char *argv[])
 	opts.singlethread = 1; //Force singlethread
 	sockaddress.sun_family = AF_UNIX;
 	strcpy(sockaddress.sun_path, SOCK_PATH);
-	if (!access(SOCK_PATH, F_OK | R_OK)) {
-		peer = 1;
-		sk = socket(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK, 0);
-		if (connect(sk, (struct sockaddr *) &sockaddress, sizeof(struct sockaddr_un)) == -1) {
-			printf("socket: %s\n", strerror(errno));
-			exit(1);
-		}
-		unlink(SOCK_PATH);
-	}
-	else {
-		if ((sk = socket(PF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK, 0)) < 0) {
-			printf("Can't make UDS");
-			exit(1);
-		}
+	if (argc != 2) {
+		sk = socket(AF_UNIX, SOCK_DGRAM, 0);
 		if (setsockopt(sk, SOL_SOCKET, SO_SNDBUFFORCE, &buf[0], sizeof(buf[0])) < 0 ||
 			setsockopt(sk, SOL_SOCKET, SO_RCVBUFFORCE, &buf[1], sizeof(buf[1])) < 0) {
 			printf("Unable to set SO_SNDBUFFORCE/SO_RCVBUFFORCE");
 			close(sk);
 			return -1;
 		}
+
 		ret = bind(sk, (struct sockaddr *) &sockaddress, sizeof(sockaddress));
 		if (ret == -1){
 			printf("BIND ERROR: %d\n", errno);
 			close(sk);
 			exit(1);
 		}
-		/*if (connect(sk, (struct sockaddr *) &sockaddress, sizeof(struct sockaddr_un)) == -1) {
+	}
+	else { /* first process */
+		sk = socket(AF_UNIX, SOCK_DGRAM, 0);
+		if (setsockopt(sk, SOL_SOCKET, SO_SNDBUFFORCE, &buf[0], sizeof(buf[0])) < 0 ||
+			setsockopt(sk, SOL_SOCKET, SO_RCVBUFFORCE, &buf[1], sizeof(buf[1])) < 0) {
+			printf("Unable to set SO_SNDBUFFORCE/SO_RCVBUFFORCE");
+			close(sk);
+			return -1;
+		}
+
+		while(access(SOCK_PATH, F_OK | R_OK)) sleep(1);
+
+		if (connect(sk, (struct sockaddr *) &sockaddress, sizeof(struct sockaddr_un)) == -1) {
 			printf("socket: %s\n", strerror(errno));
 			exit(1);
-		}*/
+		}
+
+		unlink(SOCK_PATH);
 	}
 
 	se = fuse_session_new(&args, &hello_ll_oper,
@@ -301,7 +304,7 @@ int main(int argc, char *argv[])
 	if (fuse_set_signal_handlers(se) != 0)
 	    goto err_out2;
 
-	if (!peer) {
+	if (argc == 2) {
 		if (fuse_session_mount(se, opts.mountpoint) != 0) {
 			printf("FUSE session mount ERROR: %s\n", strerror(errno));
 			goto err_out3;
@@ -309,23 +312,18 @@ int main(int argc, char *argv[])
 	}
 	else {
 		se->fd = recv_fd(sk);
-		printf("Read fuse descriptor: %d", se->fd);
+		printf("Read fuse descriptor: %d\n", se->fd);
 		sprintf(fdpath, "/dev/fd/%d", se->fd);
 		se->mountpoint = fdpath;
 	}
 
 	fuse_daemonize(opts.foreground);
 
-	if (!peer) {
+	if (argc == 2) {
 		if (send_fd(sk, se->fd) < 0) {
 			printf("Can't send FUSE dev descriptor");
 			exit(1);
 		}
-		/*sockaddress.sun_family = AF_UNSPEC;
-		if (connect(sk, (struct sockaddr *)&sockaddress, sizeof(sockaddress.sun_family))) {
-			printf("Can't clear socket's peer");
-			return -1;
-		}*/
 	}
 	/* Block until ctrl+c or fusermount -u */
 	if (opts.singlethread)
