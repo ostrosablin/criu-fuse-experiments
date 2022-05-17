@@ -235,7 +235,7 @@ int main(int argc, char *argv[])
 	int sk;
 	struct sockaddr_un sockaddress;
 	char fdpath[PATH_MAX];
-	uint32_t buf[2] = { 100, 100};
+	//uint32_t buf[2] = { 100, 100};
 
 	if (fuse_parse_cmdline(&args, &opts) != 0)
 		return 1;
@@ -261,14 +261,14 @@ int main(int argc, char *argv[])
 	opts.singlethread = 1; //Force singlethread
 	sockaddress.sun_family = AF_UNIX;
 	strcpy(sockaddress.sun_path, SOCK_PATH);
-	if (argc != 2) {
+	if (argc != 3) {
 		sk = socket(AF_UNIX, SOCK_DGRAM, 0);
-		if (setsockopt(sk, SOL_SOCKET, SO_SNDBUFFORCE, &buf[0], sizeof(buf[0])) < 0 ||
+		/*if (setsockopt(sk, SOL_SOCKET, SO_SNDBUFFORCE, &buf[0], sizeof(buf[0])) < 0 ||
 			setsockopt(sk, SOL_SOCKET, SO_RCVBUFFORCE, &buf[1], sizeof(buf[1])) < 0) {
 			printf("Unable to set SO_SNDBUFFORCE/SO_RCVBUFFORCE");
 			close(sk);
 			return -1;
-		}
+		}*/
 
 		ret = bind(sk, (struct sockaddr *) &sockaddress, sizeof(sockaddress));
 		if (ret == -1){
@@ -279,15 +279,15 @@ int main(int argc, char *argv[])
 	}
 	else { /* first process */
 		sk = socket(AF_UNIX, SOCK_DGRAM, 0);
-		if (setsockopt(sk, SOL_SOCKET, SO_SNDBUFFORCE, &buf[0], sizeof(buf[0])) < 0 ||
+		/*if (setsockopt(sk, SOL_SOCKET, SO_SNDBUFFORCE, &buf[0], sizeof(buf[0])) < 0 ||
 			setsockopt(sk, SOL_SOCKET, SO_RCVBUFFORCE, &buf[1], sizeof(buf[1])) < 0) {
 			printf("Unable to set SO_SNDBUFFORCE/SO_RCVBUFFORCE");
 			close(sk);
 			return -1;
-		}
+		}*/
 
 		while(access(SOCK_PATH, F_OK | R_OK)) sleep(1);
-
+		printf("Connected\n");
 		if (connect(sk, (struct sockaddr *) &sockaddress, sizeof(struct sockaddr_un)) == -1) {
 			printf("socket: %s\n", strerror(errno));
 			exit(1);
@@ -304,26 +304,31 @@ int main(int argc, char *argv[])
 	if (fuse_set_signal_handlers(se) != 0)
 	    goto err_out2;
 
-	if (argc == 2) {
+	if (argc == 3) {
 		if (fuse_session_mount(se, opts.mountpoint) != 0) {
 			printf("FUSE session mount ERROR: %s\n", strerror(errno));
 			goto err_out3;
 		}
+		printf("se->op.init %llx\n", (unsigned long long)se->op.init);
 	}
 	else {
 		se->fd = recv_fd(sk);
 		printf("Read fuse descriptor: %d\n", se->fd);
 		sprintf(fdpath, "/dev/fd/%d", se->fd);
-		se->mountpoint = fdpath;
+		se->mountpoint = strdup(opts.mountpoint);
+		se->got_init = 1;
+		se->conn.proto_minor = 31;
+		se->conn.proto_major = 7;
 	}
 
 	fuse_daemonize(opts.foreground);
 
-	if (argc == 2) {
+	if (argc == 3) {
 		if (send_fd(sk, se->fd) < 0) {
 			printf("Can't send FUSE dev descriptor");
 			exit(1);
 		}
+		printf("fd sent\n");
 	}
 	/* Block until ctrl+c or fusermount -u */
 	if (opts.singlethread)
